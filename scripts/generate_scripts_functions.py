@@ -197,7 +197,7 @@ def arg_type(x, el):
         if entity in var_names:
             outName = var_names[entity]
         else:
-            print("Unhandled entity type: {}".format(entity))
+            print(f"Unhandled entity type: {entity}")
     elif 'Enum' in el.attrib:
         enum = el.attrib['Enum']
         outType = type_names['MISC'][enum]
@@ -210,18 +210,15 @@ def arg_type(x, el):
     allowLocal = True
     allowGlobal = True
     if 'AllowLocalVar' in el.attrib:
-        allowLocal = True if el.attrib['AllowLocalVar'] == 'true' else False
+        allowLocal = el.attrib['AllowLocalVar'] == 'true'
     if 'AllowGlobalVar' in el.attrib:
-        allowGlobal = True if el.attrib['AllowGlobalVar'] == 'true' else False
-    if allowLocal == False and allowGlobal == True:
+        allowGlobal = el.attrib['AllowGlobalVar'] == 'true'
+    if not allowLocal and allowGlobal:
         outRef = '&'
-        outName = 'arg' + str(x) + 'G'
-    elif allowLocal == True and allowGlobal == False:
+        outName = f'arg{str(x)}G'
+    elif allowLocal and not allowGlobal:
         outRef = '&'
-        outName = 'arg' + str(x) + 'L'
-    else:
-        # Can be anything, assume immediate
-        pass
+        outName = f'arg{str(x)}L'
     if 'Desc' in el.attrib:
         outComment = el.attrib['Desc']
         if outComment == 'Boolean true/false':
@@ -231,7 +228,7 @@ def arg_type(x, el):
 
 def impl_sig(opcode, sig):
     outType = 'void'
-    if sig[0:2] == '  ':
+    if sig[:2] == '  ':
         outType = 'bool'
         sig = sig.strip()
     return (outType, 'opcode_{:04x}'.format(opcode))
@@ -242,10 +239,9 @@ def adjust_args(args):
         if len(arg[1]) == 0:
             if arg[2] in var_names:
                 args[x] = (arg[0], var_names[arg[2]], arg[2], arg[3])
-                arg = args[x]
             else:
-                args[x] = (arg[0], 'arg' + str(arg[3]), arg[2], arg[3])
-                arg = args[x]
+                args[x] = arg[0], f'arg{str(arg[3])}', arg[2], arg[3]
+            arg = args[x]
         args[x] = arg
     return args
 
@@ -257,11 +253,11 @@ def check_vector(typeName, argName, doc, args, x):
     for y in range(len(coordinates)):
         if x+y >= len(args):
             break
-        if '{}{}'.format(coordinates[y], typeName) == args[x+y][1]:
+        if f'{coordinates[y]}{typeName}' == args[x + y][1]:
             coords += 1
     if coords > 1:
-        args[x] = ('ScriptVec{}'.format(coords), argName, doc, x)
-        for y in range(coords-1):
+        args[x] = f'ScriptVec{coords}', argName, doc, x
+        for _ in range(coords-1):
             args.pop(x+1)
 
 def check_colour(typeName, argName, doc, args, x):
@@ -269,14 +265,14 @@ def check_colour(typeName, argName, doc, args, x):
     for y in range(len(colours)):
         if x+y >= len(args):
             break
-        if '{}{}'.format(colours[y], typeName) == args[x+y][1]:
+        if f'{colours[y]}{typeName}' == args[x + y][1]:
             coords += 1
     if coords > 2:
-        if coords == 4:
-            args[x] = ('ScriptRGBA', argName, doc, x)
         if coords == 3:
             args[x] = ('ScriptRGB', argName, doc, x)
-        for y in range(coords-1):
+        elif coords == 4:
+            args[x] = ('ScriptRGBA', argName, doc, x)
+        for _ in range(coords-1):
             args.pop(x+1)
 
 def process_args(args):
@@ -298,7 +294,7 @@ def finalize_args(args):
     # Accumulate counts
     name_counts = {}
     for arg in args:
-        name_counts[arg[1]] = (name_counts[arg[1]] if arg[1] in name_counts else 0) + 1
+        name_counts[arg[1]] = name_counts.get(arg[1], 0) + 1
     for x in range(len(args)):
         arg = args[x]
         orgname = arg[1]
@@ -312,9 +308,9 @@ with open(instruction_file) as f:
     for line in f:
         m = re.match("([0-9A-Za-z]+)=(-?\d+),(.*)$", line)
         if m is not None:
-            opcode = int(m.group(1), 16)
-            argc = int(m.group(2))
-            func = m.group(3)
+            opcode = int(m[1], 16)
+            argc = int(m[2])
+            func = m[3]
             am = re.findall(arg_regex, line)
             sig = impl_sig(opcode, func)
             xpath = "//Command[@ID=\"0x{:x}\"]".format(opcode)
@@ -323,30 +319,29 @@ with open(instruction_file) as f:
             if len(res) != 0:
                 res = res[0]
                 sa_name = res.attrib['Name']
-                if sig != sa_name and False:
-                    print("Name mismatch: {} v {}".format(sig, sa_name))
                 eargs = res.xpath("Args/Arg")
-                for x in range(len(eargs)):
-                    args.append(arg_type(x+1, eargs[x]))
+                args.extend(arg_type(x+1, eargs[x]) for x in range(len(eargs)))
             args = adjust_args(args)
             args = process_args(args)
             args = finalize_args(args)
             postfix = ''
             if argc >= 0:
-                signame = sig[1] + "(const ScriptArguments& args" + ''.join([", {} {}".format(x[0], x[1]) for x in args]) + ")"
+                signame = (
+                    f"{sig[1]}(const ScriptArguments& args"
+                    + ''.join([f", {x[0]} {x[1]}" for x in args])
+                    + ")"
+                )
                 for a in args:
-                    postfix += "\n\tRW_UNUSED({});".format(a[1])
+                    postfix += f"\n\tRW_UNUSED({a[1]});"
             else:
-                signame = sig[1] + "(const ScriptArguments& args)"
+                signame = f"{sig[1]}(const ScriptArguments& args)"
             postfix += "\n\tRW_UNUSED(args);"
             argsdoc = ""
             if len(args) > 0:
-                argsdoc = "\n" + "\n".join(["\t@arg {} {}".format(x[1], x[2]) for x in args])
+                argsdoc = "\n" + "\n".join([f"\t@arg {x[1]} {x[2]}" for x in args])
             if sig[0] == 'bool':
                 postfix += '\n\treturn false;'
             functions_file.write(function_template.format(opcode, argsdoc, sig[0], signame, postfix, func))
-            parameters = ['args.getAs<{}>()'.format(type_) for type_, _, _, _ in args]
+            parameters = [f'args.getAs<{type_}>()' for type_, _, _, _ in args]
             binding_file.write(binding_template.format(opcode, argc, ", ".join(parameters)))
-            if len(am) != abs(argc) and False:
-                raise RuntimeError("Mismatched argument count: {} v {}".format(len(am), argc))
 
